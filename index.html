@@ -47,10 +47,10 @@ textarea{width:100%;height:30vh}
 <div id="ctl2"><button id="spd"></button><button id="slp">Sleep: off</button></div></section>
 <div id="sheet" hidden><div><h2 id="sh"></h2><div id="sb"></div></div></div>
 <input type="file" id="file" accept=".epub,.pdf,.txt,application/epub+zip,application/pdf,text/plain" hidden>
-<script src="lib/jszip.min.js"></script><script src="lib/pdf.min.js"></script><script src="lib/media.js"></script>
+<script src="lib/jszip.min.js"></script><script src="lib/pdf.min.js"></script><script src="lib/media.js"></script><script type="module" src="lib/engine.js"></script>
 <script>
 const $=s=>document.querySelector(s),el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
-const S=Object.assign({rate:.75,pitch:1,pause:300,size:19,cite:true,refs:true,caps:true,follow:true,voice:'',vi:-1,cps:15},JSON.parse(localStorage.vs||'{}'));
+const S=Object.assign({rate:.75,pitch:1,pause:300,size:19,cite:true,refs:true,caps:true,follow:true,voice:'',vi:-1,cps:15,eng:'sys',nv:'',nrate:1},JSON.parse(localStorage.vs||'{}'));
 const saveS=()=>localStorage.vs=JSON.stringify(S),J=(k,d)=>JSON.parse(localStorage[k]||d);
 const DB={o(){return this.d?Promise.resolve():new Promise(r=>{const q=indexedDB.open('vox',1);q.onupgradeneeded=()=>q.result.createObjectStore('b',{keyPath:'id'});q.onsuccess=()=>{this.d=q.result;r()}})},
  async op(m,f){await this.o();return new Promise(r=>{const q=f(this.d.transaction('b',m).objectStore('b'));q.onsuccess=()=>r(q.result)})},
@@ -61,7 +61,38 @@ onerror=(m,u,l)=>toast('Error: '+m+' (line '+l+')',8000);onunhandledrejection=e=
 let TTS=null,NV=[],onR=null;
 try{if(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()){TTS=Capacitor.Plugins.TextToSpeech||Capacitor.registerPlugin('TextToSpeech');
  TTS.getSupportedVoices().then(r=>NV=r.voices||[]).catch(()=>{});TTS.addListener('onRangeStart',e=>onR&&onR(e))}}catch(e){TTS=null}
-const stopSpeech=()=>{if(TTS)TTS.stop().catch(()=>{});else speechSynthesis.cancel()};
+const stopSpeech=()=>{try{AU.pause()}catch(e){}if(TTS)TTS.stop().catch(()=>{});else speechSynthesis.cancel()};
+/* ---- neural engine (optional, set by lib/engine.js) ---- */
+const AU=new Audio(),NE=()=>window.NeuralEngine,neural=()=>S.eng==='neural'&&!!NE(),rk=()=>neural()?'nrate':'rate';
+const prog=p=>toast('Preparing voice… '+Math.round(p)+'%',0),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function wav(f,sr){const n=f.length,b=new ArrayBuffer(44+n*2),v=new DataView(b),w=(o,t)=>[...t].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
+ w(0,'RIFF');v.setUint32(4,36+n*2,true);w(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*2,true);
+ for(let i=0;i<n;i++){const x=Math.max(-1,Math.min(1,f[i]));v.setInt16(44+i*2,x<0?x*32768:x*32767,true)}return new Blob([b],{type:'audio/wav'})}
+function unit(c,p,s){const ss=K[c].s[p],t=[];let n=0,e=s;while(e<ss.length&&(n<280||e===s)){const x=speechify(ss[e]).trim();t.push(x);n+=x.length+1;e++}
+ return{c,p,s0:s,s1:e,text:t.join(' '),lens:t.map(x=>x.length)}}
+function nxt(u){const ss=K[u.c].s[u.p];if(u.s1<ss.length)return unit(u.c,u.p,u.s1);if(u.p+1<K[u.c].p.length)return unit(u.c,u.p+1,0);if(u.c+1<K.length)return unit(u.c+1,0,0);return null}
+const sy=u=>NE().synth(u.text,S.nrate,S.nv).then(r=>({url:URL.createObjectURL(wav(r.samples,r.sampleRate)),dur:r.samples.length/r.sampleRate}));
+const pl=(a,u,g)=>new Promise(res=>{const tot=u.lens.reduce((x,y)=>x+y,0)||1;
+ AU.onended=()=>{clearInterval(iv);URL.revokeObjectURL(a.url);res()};AU.onerror=()=>{clearInterval(iv);res()};
+ iv=setInterval(()=>{if(g!==gen)return clearInterval(iv);const f=AU.currentTime/(AU.duration||a.dur)*tot;let k=0,acc=0;while(k+1<u.lens.length&&acc+u.lens[k]<=f){acc+=u.lens[k];k++}hl(u.s0+k)},150);
+ AU.src=a.url;AU.playbackRate=1;AU.play().catch(e=>{clearInterval(iv);toast('Playback error: '+e.message,8000);pause();res()})});
+async function nstart(g){
+ const E=NE();
+ try{if(!E.ready){toast('Loading voice… first time downloads the model',0);await E.init(prog);E.ready=true;toast('Voice ready')}}
+ catch(e){pause();return toast('Voice failed: '+(e&&e.message||e),12000)}
+ if(g!==gen)return;
+ let u=unit(C,P,Sx),cur=sy(u);
+ while(g===gen&&u){
+  let a;try{a=await cur}catch(e){pause();return toast('Synthesis error: '+(e&&e.message||e),12000)}
+  if(g!==gen)return;
+  const nx=nxt(u);cur=nx?sy(nx):null;
+  if(C!==u.c){C=u.c;show()}P=u.p;hl(u.s0);save();
+  await pl(a,u,g);
+  if(g!==gen)return;
+  if(!nx){P=K[C].p.length;save();return pause()}
+  if(nx.c!==u.c&&slp.eoc){slp.eoc=false;C=nx.c;P=0;Sx=0;show();return pause()}
+  if(nx.p!==u.p||nx.c!==u.c){P=nx.p;Sx=0;await sleep(S.pause);if(g!==gen)return}
+  u=nx}}
 const MS=window.MediaSessionPlugin||null,q=p=>Promise.resolve(p).catch(()=>{});
 const chapGo=d=>{const n=C+d;if(n>=0&&n<K.length){C=n;P=0;Sx=0;show();save();if(playing)speakPara()}};
 function msUpdate(){if(!MS||!B||!K)return;try{q(MS.setMetadata({title:K[C].t,artist:B.title,album:'Voxbook'}));q(MS.setPlaybackState({playbackState:playing?'playing':'paused'}))}catch(e){}}
@@ -187,7 +218,7 @@ function hl(k){
  if(e){e.classList.add('on');if(S.follow)e.scrollIntoView({block:'center',behavior:'smooth'})}}
 function save(){const n=K.length;localStorage['pos'+B.id]=JSON.stringify({c:C,p:P,f:(C+Math.min(1,P/K[C].p.length))/n})}
 $('#txt').onclick=e=>{const s=e.target.closest('span');if(!s)return;P=+s.parentNode.dataset.p;Sx=+s.dataset.s;hl();save();if(playing)speakPara()};
-function ui(){$('#play').textContent=playing?'⏸':'▶';$('#spd').textContent='Speed '+S.rate.toFixed(2)+'×';
+function ui(){$('#play').textContent=playing?'⏸':'▶';$('#spd').textContent='Speed '+S[rk()].toFixed(2)+'×';
  $('#slp').textContent='Sleep: '+(slp.eoc?'end of chapter':slp.m?slp.m+' min':'off');msUpdate()}
 function pause(){playing=false;gen++;clearTimeout(tm);clearInterval(iv);stopSpeech();ui();if(B&&K)save()}
 function nextChap(){
@@ -196,6 +227,7 @@ function nextChap(){
  C++;P=0;Sx=0;show();save();speakPara()}
 function speakPara(){
  clearTimeout(tm);clearInterval(iv);const g=++gen;stopSpeech();
+ if(neural())return nstart(g);
  if(P>=K[C].p.length)return nextChap();
  tm=setTimeout(()=>{if(g!==gen)return;
   const ss=K[C].s[P].slice(Sx).map(speechify),off=[];let t='';ss.forEach(x=>{off.push(t.length);t+=x.trim()+' '});
@@ -219,7 +251,7 @@ $('#ps').onclick=()=>{if(Sx>0)Sx--;else if(P>0){P--;Sx=K[C].s[P].length-1}redo()
 $('#np').onclick=()=>{if(P+1<K[C].p.length){P++;Sx=0}else if(C+1<K.length){C++;P=0;Sx=0;show()}redo()};
 $('#pp').onclick=()=>{if(P>0){P--;Sx=0}else if(C>0){C--;show();P=K[C].p.length-1;Sx=0}redo()};
 const RATES=[.5,.6,.7,.75,.8,.9,1,1.1,1.25,1.5];
-$('#spd').onclick=()=>{const i=RATES.findIndex(r=>r>S.rate+.001);S.rate=RATES[i<0?0:i];saveS();ui();if(playing)speakPara()};
+$('#spd').onclick=()=>{const k=rk(),i=RATES.findIndex(r=>r>S[k]+.001);S[k]=RATES[i<0?0:i];saveS();ui();if(playing)speakPara()};
 $('#slp').onclick=()=>{clearTimeout(slp.t);const o=[0,15,30,60,'e'],i=(o.indexOf(slp.eoc?'e':slp.m)+1)%o.length,v=o[i];
  slp.eoc=v==='e';slp.m=slp.eoc?0:v;if(slp.m)slp.t=setTimeout(()=>{slp.m=0;pause()},slp.m*60000);ui()};
 $('#chs').onclick=()=>sheet('Chapters',b=>K.forEach((c,i)=>{const x=el('button','',(i===C?'▶ ':'')+c.t);x.style.cssText='width:100%;text-align:left;margin:4px 0';
@@ -243,7 +275,12 @@ $('#cfg').onclick=()=>sheet('Settings',b=>{
  toggle(b,'Follow along (scroll)','follow');toggle(b,'Skip citations like [12] and (Smith, 2020)','cite');
  toggle(b,'Stop at References','refs');toggle(b,'Skip figure and table captions','caps');
  const note=el('p','','Cleanup changes apply the next time you open a book.');note.style.cssText='color:var(--mt);font-size:13px';b.append(note);
- const t=el('button','','Test voice');t.onclick=()=>{const x='This is how your book will sound.';
+ if(NE()){const E=NE(),r2=el('div','row'),es=el('select');es.append(new Option('System voice','sys'),new Option(E.name+' neural voice (offline)','neural'));es.value=S.eng;es.onchange=()=>{S.eng=es.value;saveS();ui()};r2.append(el('span','','Voice engine'),es);b.append(r2);
+  const vs=E.ready&&E.voices?E.voices():[];if(vs.length){const r3=el('div','row'),vl=el('select');vs.forEach(v=>vl.append(new Option(v,v)));vl.value=S.nv||vs[0];vl.onchange=()=>{S.nv=vl.value;saveS()};r3.append(el('span','','Neural voice'),vl);b.append(r3)}
+  const pb=el('button','',E.ready?'Voice ready ✓':'Download and prepare voice (~'+E.mb+' MB, once)');pb.onclick=async()=>{try{toast('Preparing voice…',0);await E.init(prog);E.ready=true;toast('Voice ready');pb.textContent='Voice ready ✓'}catch(e){toast('Failed: '+(e&&e.message||e),12000)}};b.append(pb)}
+ const t=el('button','','Test voice');t.onclick=async()=>{const x='This is how your book will sound. The quick brown fox jumps over the lazy dog.';
+  if(neural()){const E=NE();try{if(!E.ready){toast('Preparing voice…',0);await E.init(prog);E.ready=true}toast('Synthesizing…',0);const t0=Date.now(),r=await E.synth(x,S.nrate,S.nv),dt=(Date.now()-t0)/1000,sec=r.samples.length/r.sampleRate;
+   toast('Made '+sec.toFixed(1)+' s of audio in '+dt.toFixed(1)+' s ('+(sec/dt).toFixed(2)+'× real time)',9000);AU.src=URL.createObjectURL(wav(r.samples,r.sampleRate));AU.play()}catch(e){toast('Failed: '+(e&&e.message||e),12000)}return}
   if(TTS){const vo=NV[S.vi];TTS.speak({text:x,lang:vo?vo.lang:'en-US',rate:S.rate,pitch:S.pitch,volume:1,voice:vo?S.vi:undefined,queueStrategy:0}).catch(e=>toast('Speech error: '+(e&&e.message||e),8000))}
   else{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(x);u.rate=S.rate;u.pitch=S.pitch;speechSynthesis.speak(u)}};b.append(t)});
 if(!TTS&&window.speechSynthesis)speechSynthesis.onvoiceschanged=()=>{};

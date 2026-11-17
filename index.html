@@ -50,13 +50,18 @@ textarea{width:100%;height:30vh}
 <script src="lib/jszip.min.js"></script><script src="lib/pdf.min.js"></script>
 <script>
 const $=s=>document.querySelector(s),el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
-const S=Object.assign({rate:.75,pitch:1,pause:300,size:19,cite:true,refs:true,caps:true,follow:true,voice:'',cps:15},JSON.parse(localStorage.vs||'{}'));
+const S=Object.assign({rate:.75,pitch:1,pause:300,size:19,cite:true,refs:true,caps:true,follow:true,voice:'',vi:-1,cps:15},JSON.parse(localStorage.vs||'{}'));
 const saveS=()=>localStorage.vs=JSON.stringify(S),J=(k,d)=>JSON.parse(localStorage[k]||d);
 const DB={o(){return this.d?Promise.resolve():new Promise(r=>{const q=indexedDB.open('vox',1);q.onupgradeneeded=()=>q.result.createObjectStore('b',{keyPath:'id'});q.onsuccess=()=>{this.d=q.result;r()}})},
  async op(m,f){await this.o();return new Promise(r=>{const q=f(this.d.transaction('b',m).objectStore('b'));q.onsuccess=()=>r(q.result)})},
  put(b){return this.op('readwrite',s=>s.put(b))},get(i){return this.op('readonly',s=>s.get(i))},del(i){return this.op('readwrite',s=>s.delete(i))}};
 function toast(m,ms=2500){const t=$('#toast')||document.body.appendChild(Object.assign(el('div'),{id:'toast'}));t.textContent=m;t.hidden=false;clearTimeout(t.h);if(ms)t.h=setTimeout(()=>t.hidden=true,ms)}
-function sheet(title,fn){$('#sh').textContent=title;const b=$('#sb');b.replaceChildren();fn(b);$('#sheet').hidden=false}
+function sheet(title,fn){$('#sh').textContent=title;const b=$('#sb');b.replaceChildren();try{fn(b)}catch(e){toast('Error: '+e.message,6000)}$('#sheet').hidden=false}
+onerror=(m,u,l)=>toast('Error: '+m+' (line '+l+')',8000);onunhandledrejection=e=>toast('Error: '+(e.reason&&e.reason.message||e.reason),8000);
+let TTS=null,NV=[],onR=null;
+try{if(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()){TTS=Capacitor.Plugins.TextToSpeech||Capacitor.registerPlugin('TextToSpeech');
+ TTS.getSupportedVoices().then(r=>NV=r.voices||[]).catch(()=>{});TTS.addListener('onRangeStart',e=>onR&&onR(e))}}catch(e){TTS=null}
+const stopSpeech=()=>{if(TTS)TTS.stop().catch(()=>{});else speechSynthesis.cancel()};
 $('#sheet').onclick=e=>{if(e.target.id==='sheet')e.target.hidden=true};
 const hash=s=>[...s].reduce((a,c)=>a*31+c.charCodeAt(0)|0,7)>>>0;
 
@@ -178,19 +183,17 @@ function save(){const n=K.length;localStorage['pos'+B.id]=JSON.stringify({c:C,p:
 $('#txt').onclick=e=>{const s=e.target.closest('span');if(!s)return;P=+s.parentNode.dataset.p;Sx=+s.dataset.s;hl();save();if(playing)speakPara()};
 function ui(){$('#play').textContent=playing?'⏸':'▶';$('#spd').textContent='Speed '+S.rate.toFixed(2)+'×';
  $('#slp').textContent='Sleep: '+(slp.eoc?'end of chapter':slp.m?slp.m+' min':'off')}
-function pause(){playing=false;gen++;clearTimeout(tm);clearInterval(iv);speechSynthesis.cancel();ui();if(B&&K)save()}
+function pause(){playing=false;gen++;clearTimeout(tm);clearInterval(iv);stopSpeech();ui();if(B&&K)save()}
 function nextChap(){
  if(slp.eoc){slp.eoc=false;P=0;Sx=0;if(C+1<K.length){C++;show()}return pause()}
  if(C+1>=K.length)return pause();
  C++;P=0;Sx=0;show();save();speakPara()}
 function speakPara(){
- clearTimeout(tm);clearInterval(iv);const g=++gen;speechSynthesis.cancel();
+ clearTimeout(tm);clearInterval(iv);const g=++gen;stopSpeech();
  if(P>=K[C].p.length)return nextChap();
  tm=setTimeout(()=>{if(g!==gen)return;
   const ss=K[C].s[P].slice(Sx).map(speechify),off=[];let t='';ss.forEach(x=>{off.push(t.length);t+=x.trim()+' '});
-  const u=new SpeechSynthesisUtterance(t),v=speechSynthesis.getVoices().find(v=>v.voiceURI===S.voice);
-  u.rate=S.rate;u.pitch=S.pitch;if(v){u.voice=v;u.lang=v.lang}
-  const t0=Date.now(),est=t.length/(S.cps*S.rate)*1000,base=Sx;let got=false,done=false,bk;
+  const t0=Date.now(),est=t.length/(S.cps*S.rate)*1000,base=Sx;let got=false,done=false,bk,u={};
   const fin=()=>{if(done||g!==gen)return;done=true;clearInterval(iv);clearTimeout(bk);const dt=Date.now()-t0;
    if(dt>1500&&t.length>60){S.cps=.7*S.cps+.3*(t.length/(dt/1000)/S.rate);saveS()}
    P++;Sx=0;save();hl();tm=setTimeout(()=>{if(g===gen&&playing)speakPara()},S.pause)};
@@ -198,7 +201,11 @@ function speakPara(){
   u.onend=fin;u.onerror=e=>{if(g!==gen)return;if(/interrupt|cancel/.test(e.error))return;pause();toast('Speech error: '+e.error,5000)};
   bk=setTimeout(fin,est*1.6+4000);
   iv=setInterval(()=>{if(got)return;const f=(Date.now()-t0)/est*t.length;let k=0;while(k+1<off.length&&off[k+1]<=f)k++;hl(base+k)},250);
-  speechSynthesis.speak(u)},70)}
+  if(TTS){onR=e=>{if(g!==gen)return;got=true;let k=0;while(k+1<off.length&&off[k+1]<=e.start)k++;hl(base+k)};
+   const vo=NV[S.vi],o={text:t,lang:vo?vo.lang:'en-US',rate:S.rate,pitch:S.pitch,volume:1,queueStrategy:0};if(vo)o.voice=S.vi;
+   TTS.speak(o).then(fin).catch(e=>{if(g!==gen)return;pause();toast('Speech error: '+(e&&e.message||e),8000)})}
+  else{const w=new SpeechSynthesisUtterance(t),v=speechSynthesis.getVoices().find(v=>v.voiceURI===S.voice);w.rate=S.rate;w.pitch=S.pitch;if(v){w.voice=v;w.lang=v.lang}
+   w.onboundary=u.onboundary;w.onend=fin;w.onerror=u.onerror;speechSynthesis.speak(w)}},70)}
 $('#play').onclick=()=>{if(playing)pause();else{playing=true;ui();speakPara()}};
 const redo=()=>{hl();save();if(playing)speakPara()};
 $('#ns').onclick=()=>{const n=K[C].s[P].length;if(Sx+1<n){Sx++;redo()}else{P++;Sx=0;if(P>=K[C].p.length){P=0;if(C+1<K.length){C++;show()}else P=K[C].p.length-1}redo()}};
@@ -224,12 +231,15 @@ $('#cfg').onclick=()=>sheet('Settings',b=>{
  slider(b,'Speed','rate',.5,1.5,.05,x=>x.toFixed(2)+'×');slider(b,'Pitch','pitch',.7,1.3,.05,x=>x.toFixed(2));
  slider(b,'Pause between paragraphs','pause',0,900,50,x=>x+' ms');slider(b,'Text size','size',15,28,1,x=>x+' px');
  const r=el('div','row'),sel=el('select');sel.append(new Option('System default',''));
- speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang)).forEach(v=>sel.append(new Option(v.name+' ('+v.lang+')',v.voiceURI)));
- sel.value=S.voice;sel.onchange=()=>{S.voice=sel.value;saveS()};r.append(el('span','','Voice'),sel);b.append(r);
+ if(TTS)NV.forEach((v,i)=>{if(/^en/i.test(v.lang))sel.append(new Option(v.name+' ('+v.lang+')',i))});
+ else speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang)).forEach(v=>sel.append(new Option(v.name+' ('+v.lang+')',v.voiceURI)));
+ sel.value=TTS?(S.vi<0?'':S.vi):S.voice;sel.onchange=()=>{if(TTS)S.vi=sel.value===''?-1:+sel.value;else S.voice=sel.value;saveS()};r.append(el('span','','Voice'),sel);b.append(r);
  toggle(b,'Follow along (scroll)','follow');toggle(b,'Skip citations like [12] and (Smith, 2020)','cite');
  toggle(b,'Stop at References','refs');toggle(b,'Skip figure and table captions','caps');
- b.append(el('p','','Cleanup changes apply the next time you open a book.')).style.cssText='color:var(--mt);font-size:13px';
- const t=el('button','','Test voice');t.onclick=()=>{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('This is how your book will sound.'),v=speechSynthesis.getVoices().find(v=>v.voiceURI===S.voice);u.rate=S.rate;u.pitch=S.pitch;if(v){u.voice=v;u.lang=v.lang}speechSynthesis.speak(u)};b.append(t)});
-speechSynthesis.onvoiceschanged=()=>{};
+ const note=el('p','','Cleanup changes apply the next time you open a book.');note.style.cssText='color:var(--mt);font-size:13px';b.append(note);
+ const t=el('button','','Test voice');t.onclick=()=>{const x='This is how your book will sound.';
+  if(TTS){const vo=NV[S.vi];TTS.speak({text:x,lang:vo?vo.lang:'en-US',rate:S.rate,pitch:S.pitch,volume:1,voice:vo?S.vi:undefined,queueStrategy:0}).catch(e=>toast('Speech error: '+(e&&e.message||e),8000))}
+  else{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(x);u.rate=S.rate;u.pitch=S.pitch;speechSynthesis.speak(u)}};b.append(t)});
+if(!TTS&&window.speechSynthesis)speechSynthesis.onvoiceschanged=()=>{};
 lib();
 </script></body></html>

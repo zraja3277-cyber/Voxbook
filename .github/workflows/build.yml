@@ -5,6 +5,18 @@ on:
     branches: [main]
 jobs:
   apk:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: kokoro
+            id: com.voxbook.kokoro
+            label: Voxbook Kokoro
+            pkgs: "kokoro-js @huggingface/transformers@^3.5.1"
+          - key: piper
+            id: com.voxbook.piper
+            label: Voxbook Piper
+            pkgs: "piper-plus onnxruntime-web@^1.22.0"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,13 +28,18 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm install --legacy-peer-deps
+      - run: npm install --no-save --legacy-peer-deps ${{ matrix.pkgs }}
       - run: |
-          mkdir -p www/lib
+          mkdir -p www/lib/ort
           cp index.html www/index.html
           cp node_modules/jszip/dist/jszip.min.js www/lib/
           cp node_modules/pdfjs-dist/build/pdf.min.js www/lib/
           cp node_modules/pdfjs-dist/build/pdf.worker.min.js www/lib/
           npx esbuild media.js --bundle --format=iife --outfile=www/lib/media.js
+          npx esbuild engine-${{ matrix.key }}.js --bundle --format=esm --platform=browser --target=es2022 --outfile=www/lib/engine.js
+          for d in $(find node_modules -type d -path '*onnxruntime-web/dist'); do cp $d/*.wasm $d/*.mjs www/lib/ort/ 2>/dev/null || true; done
+          du -sh www
+      - run: echo '{"appId":"${{ matrix.id }}","appName":"${{ matrix.label }}","webDir":"www"}' > capacitor.config.json
       - run: npx cap add android
       - run: |
           sed -i 's|<application|<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/><queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries><application|' android/app/src/main/AndroidManifest.xml
@@ -35,5 +52,5 @@ jobs:
         working-directory: android
       - uses: actions/upload-artifact@v4
         with:
-          name: voxbook-apk
+          name: voxbook-${{ matrix.key }}-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk

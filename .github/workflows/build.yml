@@ -28,6 +28,9 @@ jobs:
           sed -i 's|<application|<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/><queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries><application|' android/app/src/main/AndroidManifest.xml
           grep -c TTS_SERVICE android/app/src/main/AndroidManifest.xml
       - run: npx cap sync android
+      - run: |
+          mkdir -p ~/.android
+          cp dbg.keystore ~/.android/debug.keystore
       - run: ./gradlew assembleDebug --no-daemon
         working-directory: android
       - uses: actions/upload-artifact@v4

@@ -1,3 +1,4 @@
+
 name: Build APK
 on:
   workflow_dispatch:
@@ -23,6 +24,9 @@ jobs:
           cp node_modules/pdfjs-dist/build/pdf.min.js www/lib/
           cp node_modules/pdfjs-dist/build/pdf.worker.min.js www/lib/
       - run: npx cap add android
+      - run: |
+          sed -i 's|<application|<queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries><application|' android/app/src/main/AndroidManifest.xml
+          grep -c TTS_SERVICE android/app/src/main/AndroidManifest.xml
       - run: npx cap sync android
       - run: ./gradlew assembleDebug --no-daemon
         working-directory: android
